@@ -2,6 +2,7 @@ package com.music.bitchord.shared
 
 import io.ktor.client.HttpClient
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlin.time.Clock
 
 /**
  * Platform identity. `androidMain` / `iosMain` provide the actuals.
@@ -31,3 +32,8 @@ data class BuildInfo(
     val versionCode: Int,
     val isDebug: Boolean,
 )
+
+/** Wall clock, common replacement for `System.currentTimeMillis()`. */
+fun nowEpochMillis(): Long = Clock.System.now().toEpochMilliseconds()
+
+fun nowEpochSeconds(): Long = Clock.System.now().epochSeconds
