@@ -72,8 +72,11 @@ jobs:
           distribution: 'temurin'
           cache: gradle
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      # macos-15 images ship a full Android SDK preinstalled — no setup step.
+      - name: Verify Android SDK
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          ls "$ANDROID_HOME/platform-tools" | head -n 5
 
       - name: Setup local.properties stub
         run: |
