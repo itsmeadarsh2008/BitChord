@@ -90,13 +90,10 @@ jobs:
         run: xcodebuild -version && xcrun simctl list devices available | head -n 20
 
       - name: Build iosApp for Simulator (unsigned)
-        # NOTE: -target (not -scheme) because the .xcodeproj ships no shared
-        # .xcscheme yet — Xcode autogenerates schemes locally, CI can't rely
-        # on that. Switch to -scheme once iosApp.xcodeproj/xcshareddata exists.
         run: |
           xcodebuild \
             -project iosApp/iosApp.xcodeproj \
-            -target iosApp \
+            -scheme iosApp \
             -sdk iphonesimulator \
             -configuration Debug \
             -derivedDataPath build/ios-derived \
