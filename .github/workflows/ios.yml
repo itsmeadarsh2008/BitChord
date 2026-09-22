@@ -27,8 +27,16 @@ jobs:
           distribution: 'temurin'
           cache: gradle
 
-      - name: Setup Android SDK (for :shared androidTarget)
-        uses: android-actions/setup-android@v3
+      # macos-15 images ship a full Android SDK preinstalled
+      # (/Users/runner/Library/Android/sdk) — no setup step needed.
+      # (android-actions/setup-android@v3 was removed: its default
+      # `packages: tools platform-tools` fails since the obsolete `tools`
+      # package no longer exists in the SDK repository.)
+      - name: Verify Android SDK
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+          ls "$ANDROID_HOME/platform-tools" | head -n 5
 
       - name: Setup local.properties stub
         run: |
