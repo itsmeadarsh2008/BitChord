@@ -1,0 +1,101 @@
+name: iOS CI
+
+# No local Mac needed — macos-latest IS the Mac. This workflow compiles the
+# :shared Kotlin/Native framework and the iosApp shell on GitHub's runner.
+#
+# What this produces WITHOUT signing (default, free):
+#   - :shared framework for iosSimulatorArm64 / iosX64 / iosArm64
+#   - iosApp Simulator .app (CODE_SIGNING_ALLOWED=NO)
+# What needs Apple signing (paid Developer account + Secrets):
+#   - distributable .ipa via xcodebuild archive + -exportArchive
+#   Required secrets: APPLE_CERT_P12, APPLE_CERT_PASSWORD,
+#   PROVISIONING_PROFILE, KEYCHAIN_PASSWORD, TEAM_ID
+
+on: [push, pull_request]
+
+jobs:
+  shared-framework:
+    runs-on: macos-15
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: Setup Android SDK (for :shared androidTarget)
+        uses: android-actions/setup-android@v3
+
+      - name: Setup local.properties stub
+        run: |
+          echo "LASTFM_API_KEY=${{ secrets.LASTFM_API_KEY }}" > local.properties
+          echo "LASTFM_SECRET=${{ secrets.LASTFM_SECRET }}" >> local.properties
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Check shared targets
+        run: ./gradlew :shared:tasks --all | grep -i -E "ios|framework|xcode" || true
+
+      - name: Run shared common tests
+        run: ./gradlew :shared:testDebugUnitTest --stacktrace
+
+      - name: Build shared Android library
+        run: ./gradlew :shared:assembleDebug --stacktrace
+
+      - name: Link shared iOS frameworks
+        run: ./gradlew :shared:linkDebugFrameworkIosSimulatorArm64 :shared:linkDebugFrameworkIosX64 --stacktrace
+
+  ios-app-simulator:
+    needs: shared-framework
+    runs-on: macos-15
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Setup local.properties stub
+        run: |
+          echo "LASTFM_API_KEY=${{ secrets.LASTFM_API_KEY }}" > local.properties
+          echo "LASTFM_SECRET=${{ secrets.LASTFM_SECRET }}" >> local.properties
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Show Xcode version
+        run: xcodebuild -version && xcrun simctl list devices available | head -n 20
+
+      - name: Build iosApp for Simulator (unsigned)
+        # NOTE: -target (not -scheme) because the .xcodeproj ships no shared
+        # .xcscheme yet — Xcode autogenerates schemes locally, CI can't rely
+        # on that. Switch to -scheme once iosApp.xcodeproj/xcshareddata exists.
+        run: |
+          xcodebuild \
+            -project iosApp/iosApp.xcodeproj \
+            -target iosApp \
+            -sdk iphonesimulator \
+            -configuration Debug \
+            -derivedDataPath build/ios-derived \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=""
+
+      - name: Upload Simulator app
+        uses: actions/upload-artifact@v4
+        with:
+          name: bitchord-ios-simulator
+          path: build/ios-derived/Build/Products/Debug-iphonesimulator/*.app
+          if-no-files-found: warn
