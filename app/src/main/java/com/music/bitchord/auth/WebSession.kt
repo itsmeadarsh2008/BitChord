@@ -49,24 +49,23 @@ data class CapturedSession(
  *
  * These are separate stores and the difference is invisible until it bites:
  * signing out of BitChord forgets the cookie the app makes requests with, and
- * leaves the browser's copy untouched. The next sign-in then loads
- * accounts.google.com, is recognised immediately, redirects straight through
- * to music.youtube.com and hands back a cookie for the account that was just
- * signed out of — a sign-in screen that cannot be used to sign in as anyone
- * else, and shows barely a flicker while refusing to.
+ * leaves the browser's copy untouched. The next sign-in then loads the login
+ * page, is recognised immediately, redirects straight through to the service
+ * and hands back a cookie for the account that was just signed out of — a
+ * sign-in screen that cannot be used to sign in as anyone else, and shows
+ * barely a flicker while refusing to.
  */
 object BrowserSession {
 
     /**
-     * Forgets the Google login the in-app browser is holding.
+     * Forgets the login the in-app browser is holding.
      *
-     * Google's cookies only, by name, rather than [CookieManager.removeAllCookies]:
-     * the same jar holds the Discord and Last.fm logins from their own in-app
-     * browsers, and signing out of YouTube Music is not a reason to sign out of
-     * those. There is no per-domain removal in the API, so each cookie is
-     * overwritten with an expired one of the same name.
+     * The hosts come from the imported service file — the same session the
+     * sign-in screen reads. Scoped to those origins rather than the whole
+     * jar: the same store holds other services' logins, and signing out of
+     * one is not a reason to sign out of those.
      */
-    fun clearGoogleCookies() {
+    fun clearLoginCookies() {
         // Best effort throughout. CookieManager needs a WebView provider, and
         // on a device that is mid-update or has none there isn't one — which is
         // a reason for the next sign-in to be less convenient, not a reason for
@@ -76,7 +75,7 @@ object BrowserSession {
             return
         }
         var cleared = 0
-        GOOGLE_ORIGINS.forEach { origin ->
+        loginOrigins.forEach { origin ->
             val jar = manager.getCookie(origin) ?: return@forEach
             val host = origin.substringAfter("://")
             jar.split(';').forEach { entry ->
@@ -92,15 +91,11 @@ object BrowserSession {
             }
         }
         runCatching { manager.flush() }
-        Log.d("BitChord", "cleared $cleared browser cookies for Google")
+        Log.d("BitChord", "cleared $cleared browser cookies for the service login")
     }
 
-    private val GOOGLE_ORIGINS = listOf(
-        "https://music.youtube.com",
-        "https://www.youtube.com",
-        "https://youtube.com",
-        "https://accounts.google.com",
-        "https://www.google.com",
-        "https://google.com",
-    )
+    private val loginOrigins: List<String>
+        get() = runCatching {
+            com.music.bitchord.data.service.ServiceConfig.loginCookieHosts().map { "https://$it" }
+        }.getOrDefault(emptyList())
 }

@@ -52,14 +52,19 @@ data class SourceConfig(
 
 /**
  * The user's sources, always tried in the fixed order [SourceKind] declares:
- * their own addons first, then JioSaavn, then YouTube Music.
+ * their own addons first, then YouTube Music.
  *
  * [SourceKind.YOUTUBE] is seeded on first run and cannot be deleted, only
  * disabled — it needs no configuration, so a "remove" would delete something
  * the user could not then re-create by typing anything in, it would just be a
  * switch that hides itself. Addons are entirely optional: with none
- * configured, YouTube and JioSaavn are all there is, and that is now the
- * default state of a fresh install rather than a build secret's absence.
+ * configured, YouTube is all there is, and that is now the default state of
+ * a fresh install rather than a build secret's absence.
+ *
+ * The catalogue source is no longer seeded for new installs, but installs
+ * that already hold one keep it — stored configs are never dropped by kind
+ * here (only the retired module index is), and its row keeps its toggle.
+ * Nothing below re-adds it once removed.
  */
 object SourceRegistry {
 
@@ -102,7 +107,9 @@ object SourceRegistry {
 
         // Seeded rather than persisted-on-first-write, so that a build that
         // adds a new built-in kind picks it up for existing installs too.
-        val seeded = stored + BUILT_IN_KINDS
+        // Only YouTube is seeded: Catalogue stays available to installs that
+        // already hold it, but a fresh install starts without it.
+        val seeded = stored + SEEDED_KINDS
             .filter { kind -> stored.none { it.kind == kind } }
             .map { SourceConfig(kind = it, enabled = true) }
 
@@ -138,12 +145,26 @@ object SourceRegistry {
      * entry down with it. A strict `List<SourceConfig>` decode fails whole:
      * one bad enum value and the user's real, working module config is
      * silently gone along with it.
+     *
+     * Entries stored under the retired `JIOSAAVN` kind name are migrated to
+     * [SourceKind.CATALOGUE], which is the same source renamed.
      */
     private fun decodeStored(raw: String): List<SourceConfig> {
         val elements = runCatching { json.parseToJsonElement(raw).jsonArray }
             .getOrElse { return emptyList() }
         return elements.mapNotNull { element ->
-            runCatching { json.decodeFromJsonElement(SourceConfig.serializer(), element) }
+            val migrated = (element as? kotlinx.serialization.json.JsonObject)
+                ?.let { obj ->
+                    if ((obj["kind"] as? kotlinx.serialization.json.JsonPrimitive)?.content == "JIOSAAVN") {
+                        kotlinx.serialization.json.JsonObject(
+                            obj.filterKeys { it != "kind" } +
+                                ("kind" to kotlinx.serialization.json.JsonPrimitive("CATALOGUE")),
+                        )
+                    } else {
+                        obj
+                    }
+                } ?: element
+            runCatching { json.decodeFromJsonElement(SourceConfig.serializer(), migrated) }
                 .onFailure { TrackLog.w(TAG, "dropping unreadable stored source: ${it.message}") }
                 .getOrNull()
         }
@@ -374,7 +395,7 @@ object SourceRegistry {
         // Same protocol, same implementation — the kinds differ only in rank.
         SourceKind.CUSTOM_MODULE -> ModuleSource(config)
         SourceKind.MODULE -> ModuleSource(config)
-        SourceKind.JIOSAAVN -> JioSaavnSource(config)
+        SourceKind.CATALOGUE -> CatalogueSource(config)
         SourceKind.YOUTUBE -> YouTubeSource(config)
     }
 
@@ -424,7 +445,16 @@ object SourceRegistry {
             .build()
             .toString()
 
-    private val BUILT_IN_KINDS = listOf(SourceKind.JIOSAAVN, SourceKind.YOUTUBE)
+    /** Kinds seeded on first run. Catalogue is deliberately absent: new installs start without it. */
+    private val SEEDED_KINDS = listOf(SourceKind.YOUTUBE)
+
+    /**
+     * Kinds the sources screen may not delete. The catalogue stays here even
+     * though it is no longer seeded: an install that still holds one could
+     * not re-create it by typing anything in, so for them a "remove" would
+     * just be a switch that hides itself — the same reason YouTube is listed.
+     */
+    private val BUILT_IN_KINDS = listOf(SourceKind.CATALOGUE, SourceKind.YOUTUBE)
 
     private const val KEY_SOURCES = "sources"
     private const val PREFIX = "src:"

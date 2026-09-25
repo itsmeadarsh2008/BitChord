@@ -192,7 +192,7 @@ fun SourcesScreen(
             // The addons are split out from the rest because they are the only
             // rows whose order is the *user's*. Everything else ranks by kind,
             // which is fixed in [SourceKind] and not something a drag should be
-            // able to argue with — a gesture that let JioSaavn be dragged above
+            // able to argue with — a gesture that let Catalogue be dragged above
             // an addon would be offering a choice the resolver does not
             // actually honour.
             //
@@ -219,7 +219,7 @@ fun SourcesScreen(
                         onMetered = metered == true,
                         ceiling = ceiling,
                         // Anything the user configured is theirs to edit or
-                        // delete. JioSaavn and YouTube have no address to
+                        // delete. Catalogue and YouTube have no address to
                         // change, so a tap on them would open an empty editor.
                         onClick = if (config.kind.needsServer) ({ onEditSource(config) }) else null,
                         // YouTube gets no switch at all — see
@@ -608,7 +608,7 @@ private fun SourceRow(
                 SourceKind.ADDON -> Icons.Rounded.Extension
                 SourceKind.CUSTOM_MODULE -> Icons.Rounded.Extension
                 SourceKind.MODULE -> Icons.Rounded.Extension
-                SourceKind.JIOSAAVN -> Icons.Rounded.GraphicEq // or some other icon
+                SourceKind.CATALOGUE -> Icons.Rounded.GraphicEq // or some other icon
                 SourceKind.YOUTUBE -> Icons.Rounded.PlayCircle
             },
             contentDescription = null,

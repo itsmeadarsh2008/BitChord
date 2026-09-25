@@ -1,7 +1,6 @@
 package com.music.bitchord.auth
 
 import android.annotation.SuppressLint
-import android.net.Uri
 import android.webkit.CookieManager
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -16,42 +15,34 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 import com.music.bitchord.data.DebugLog as Log
+import com.music.bitchord.data.service.ServiceConfig
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 
-private const val MUSIC_ORIGIN = "https://music.youtube.com"
-
-private const val LOGIN_URL =
-    "https://accounts.google.com/ServiceLogin" +
-        "?ltmpl=music&service=youtube&passive=true" +
-    "&continue=https%3A%2F%2Fmusic.youtube.com%2F"
-
 /**
- * CookieManager cannot expire every Google HttpOnly cookie by name. Logging
+ * CookieManager cannot expire every HttpOnly cookie by name. Logging
  * out inside this WebView is the reliable way to make Add account present the
  * account chooser, without touching BitChord's separately encrypted sessions.
  */
-private val LOGOUT_THEN_LOGIN_URL =
-    "https://accounts.google.com/Logout?continue=${Uri.encode(LOGIN_URL)}"
 
 private const val TAG = "BitChord"
 
 /**
- * In-app Google sign-in for YouTube Music, and the way to change which channel
+ * In-app sign-in for the streaming service, and the way to change which channel
  * it listens as.
  *
- * [WebSessionMode.SIGN_IN] loads the standard Google web login with
- * `continue=music.youtube.com`. The user authenticates directly against
- * accounts.google.com (2FA, passkeys etc. all work — it's the real page). When
- * Google redirects back to music.youtube.com the session is taken automatically
- * and the screen closes. The browser's Google cookies are cleared on the way in,
+ * [WebSessionMode.SIGN_IN] loads the standard web login from the imported
+ * service file. The user authenticates directly against the real login page
+ * (2FA, passkeys etc. all work — it's the real page). When the service
+ * redirects back to the login origin the session is taken automatically
+ * and the screen closes. The browser's cookies are cleared on the way in,
  * or a listener who signed out would be waved straight back through as the
- * account they were trying to leave — see [BrowserSession.clearGoogleCookies].
+ * account they were trying to leave — see [BrowserSession.clearLoginCookies].
  *
- * [WebSessionMode.SWITCH_CHANNEL] keeps those cookies and opens YouTube Music
+ * [WebSessionMode.SWITCH_CHANNEL] keeps those cookies and opens the service
  * itself, so the listener can use the avatar menu's own Accounts list — the one
  * screen that authoritatively knows which channels exist and which is which.
  * Nothing is taken automatically there: the session is read when they say so,
@@ -73,6 +64,8 @@ fun YtMusicLoginScreen(
     captureRequest: Int = 0,
     /** Told when a capture was asked for and there was no session to take. */
     onCaptureUnavailable: () -> Unit = {},
+    loginOrigin: String = ServiceConfig.loginOrigin(),
+    logoutLoginUrl: String = ServiceConfig.logoutLoginUrl(),
 ) {
     var webView by remember { mutableStateOf<WebView?>(null) }
     val currentOnCaptured by rememberUpdatedState(onCaptured)
@@ -81,13 +74,13 @@ fun YtMusicLoginScreen(
     LaunchedEffect(captureRequest) {
         if (captureRequest == 0) return@LaunchedEffect
         val view = webView
-        if (view == null || !captureFrom(view, currentOnCaptured)) currentOnUnavailable()
+        if (view == null || !captureFrom(view, loginOrigin, currentOnCaptured)) currentOnUnavailable()
     }
 
     AndroidView(
         modifier = modifier.fillMaxSize(),
         factory = { context ->
-            if (mode == WebSessionMode.SIGN_IN) BrowserSession.clearGoogleCookies()
+            if (mode == WebSessionMode.SIGN_IN) BrowserSession.clearLoginCookies()
             WebView(context).apply {
                 settings.javaScriptEnabled = true
                 settings.domStorageEnabled = true
@@ -97,18 +90,18 @@ fun YtMusicLoginScreen(
 
                     override fun onPageFinished(view: WebView?, url: String?) {
                         // Only [WebSessionMode.SIGN_IN] finishes by itself. In
-                        // the switch flow the first music.youtube.com page is
+                        // the switch flow the first service page is
                         // where the listener starts, not where they are done —
                         // grabbing the session there would save the channel
                         // they came to change.
                         if (mode != WebSessionMode.SIGN_IN) return
-                        if (captured || url?.startsWith(MUSIC_ORIGIN) != true) return
-                        if (view != null && captureFrom(view, currentOnCaptured)) captured = true
+                        if (captured || url?.startsWith(loginOrigin) != true) return
+                        if (view != null && captureFrom(view, loginOrigin, currentOnCaptured)) captured = true
                     }
                 }
 
                 webView = this
-                loadUrl(if (mode == WebSessionMode.SIGN_IN) LOGOUT_THEN_LOGIN_URL else "$MUSIC_ORIGIN/")
+                loadUrl(if (mode == WebSessionMode.SIGN_IN) logoutLoginUrl else "$loginOrigin/")
             }
         },
     )
@@ -122,8 +115,8 @@ fun YtMusicLoginScreen(
  *   at all — and the caller should leave the screen open rather than saving
  *   something that cannot sign a request. See [AuthStore.hasApiSid].
  */
-private fun captureFrom(view: WebView, onCaptured: (CapturedSession) -> Unit): Boolean {
-    val cookies = CookieManager.getInstance().getCookie(MUSIC_ORIGIN)
+private fun captureFrom(view: WebView, loginOrigin: String, onCaptured: (CapturedSession) -> Unit): Boolean {
+    val cookies = CookieManager.getInstance().getCookie(loginOrigin)
     if (cookies == null || !AuthStore.hasApiSid(cookies)) return false
     // Flushed here rather than left to the WebView's own schedule: the screen
     // is usually closing in the next frame, and a cookie jar written after

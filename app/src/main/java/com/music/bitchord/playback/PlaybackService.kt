@@ -1112,7 +1112,7 @@ class PlaybackService : MediaLibraryService() {
                     .build()
             }
             // Automix owns a base-cache Opus rendition. It must bypass the
-            // playback race winner (JioSaavn, a module, or a lossless upgrade)
+            // playback race winner (Catalogue, a module, or a lossless upgrade)
             // and resolve directly to YouTube for this analysis-only request.
             if (AutomixAnalysisSource.requestsYouTubeOpus(
                     dataSpec.uri.getQueryParameter(AutomixAnalysisSource.OPUS_QUERY_PARAMETER),
@@ -1203,7 +1203,7 @@ class PlaybackService : MediaLibraryService() {
                     NerdStats.onSourceStream(videoId, serving.format, sourceName)
                 }
                 NerdStats.recordSource(videoId, sourceName)
-                // Read-ahead can pin JioSaavn's quick 320kbps answer before
+                // Read-ahead can pin Catalogue's quick 320kbps answer before
                 // this track becomes current.  It is the right answer for an
                 // immediate start, but it is not the final quality verdict:
                 // returning here used to bypass [resolveWithModulePriority],
@@ -3041,7 +3041,7 @@ class PlaybackService : MediaLibraryService() {
             TrackLog.d("BitChord", "upgraded to ${stream.format.summary} at ${now.position}ms")
             watchUpgrade(mediaId, now.uri, now.position, now.duration, previousFormat)
             if (QualityUpgrade.continueAfterLossySwap(mediaId)) {
-                // The immediate JioSaavn improvement stays audible while a
+                // The immediate Catalogue improvement stays audible while a
                 // slower lossless source is checked against its higher-quality
                 // floor. Wait for this pass to release `upgradeJob`; otherwise
                 // the second pass would see the first one as still active and
@@ -3079,7 +3079,7 @@ class PlaybackService : MediaLibraryService() {
         val item = player.currentMediaItem ?: return null
         if (item.mediaId != mediaId) return null
         val uri = item.localConfiguration?.uri?.toString() ?: return null
-        // One mid-track lossy improvement (typically Opus → JioSaavn) must not
+        // One mid-track lossy improvement (typically Opus → Catalogue) must not
         // prevent the requested lossless copy from replacing it. Two marked
         // URIs get distinct cache entries through [QualityUpgrade.upgradedUri].
         if (uri.contains("${QualityUpgrade.MARKER}=hifi-")) return null

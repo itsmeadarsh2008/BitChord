@@ -63,15 +63,15 @@ import java.util.Locale
  *     the scrape is kept off the hot path entirely — see [newPipeUrl], the
  *     failsafe of last resort.
  *
- *  2. **Which client asks.** Google turns identities away without notice and
- *     without pattern: the client that works today answers `LOGIN_REQUIRED`
- *     next month. So [CLIENTS] is walked rather than trusted, the one that last
- *     worked is tried first, and one that is refused for a track is stood down
- *     for that track for a while.
+ *  2. **Which client asks.** The service turns identities away without
+ *     notice and without pattern: the client that works today answers
+ *     `LOGIN_REQUIRED` next month. So [clients] is walked rather than
+ *     trusted, the one that last worked is tried first, and one that is
+ *     refused for a track is stood down for that track for a while.
  *
- *  3. **Whether the URL is real.** Every googlevideo URL carries an `n`
+ *  3. **Whether the URL is real.** Every stream URL carries an `n`
  *     parameter which, sent as-is, gets the response throttled to a crawl or
- *     refused with 403; it has to be transformed by running YouTube's own
+ *     refused with 403; it has to be transformed by running the service's own
  *     player JavaScript, which is what NewPipe's [YoutubeJavaScriptPlayerManager]
  *     does. That can fail quietly, and a URL can be dead on arrival for reasons
  *     no amount of care predicts — so nothing is handed to the player, or
@@ -93,37 +93,16 @@ object StreamResolver {
 
     /**
      * Player clients in the order they are worth asking, cheapest and most
-     * reliable first — an order taken from what the live endpoint actually
-     * answers, not from what ought to work.
-     *
-     * The four at the top return plain `url` fields, so a stream is one POST
-     * away with no player JavaScript involved at all. [PlayerClient.ANDROID]
-     * below them hands back ciphered formats, costing a download of that
-     * JavaScript and a signature to solve. See each entry in [PlayerClient].
-     *
-     * No web client appears here. `WEB_REMIX` was the tail of this list and
-     * paid for itself in neither reliability nor speed — always ciphered,
-     * usually refused, and reached only on tracks that were already failing,
-     * where the one thing left worth spending is time. [newPipeUrl] is the
-     * last resort instead.
+     * reliable first — an order taken from the imported service file, which
+     * ranks them by what the live endpoint actually answers.
      *
      * The gating that decides which of these answers is applied per network,
      * not globally — an identity refused on one connection is served on
      * another — which is the whole reason this is a list and why the order is
      * only a starting guess that [clientOrder] corrects from experience.
-     *
-     * TVHTML5 (Cobalt v7) is first because it works on flagged IPs without
-     * PO Token — the most reliable client as of July 2026.
      */
-    private val CLIENTS = listOf(
-        PlayerClient.ANDROID_MUSIC,
-        PlayerClient.TVHTML5,
-        PlayerClient.ANDROID_VR,
-        PlayerClient.ANDROID_VR_LEGACY,
-        PlayerClient.IOS,
-        PlayerClient.IOS_RECENT,
-        PlayerClient.ANDROID,
-    )
+    private fun clients(): List<PlayerClient> =
+        com.music.bitchord.data.service.ServiceConfig.orderedClients()
 
     /** NewPipe needs a Downloader; reuse the app's single OkHttp client. */
     private class OkHttpDownloader : Downloader() {
@@ -524,7 +503,7 @@ object StreamResolver {
 
     /**
      * Tried after [playerStream] and before extraction, and only when there is
-     * a session to send: [PlayerClient.WEB_REMIX] carrying the signed-in
+     * a session to send: the file's web client carrying the signed-in
      * listener's own cookie.
      *
      * The anonymous walk in [playerStream] is refused on sight far more often
@@ -533,10 +512,10 @@ object StreamResolver {
      * session cookie on a browser-shaped client is the one case that isn't an
      * anonymous device pretending otherwise, which is why it is asked at all,
      * rather than left at the reputation an earlier cookie-less attempt earned
-     * it — the one that got it dropped from [CLIENTS] entirely.
+     * it — the one that got it dropped from the walk entirely.
      *
      * It is asked *after* that walk rather than ahead of it because of what it
-     * costs when it doesn't work. WEB_REMIX is a web client, so its formats
+     * costs when it doesn't work. The web client is a web client, so its formats
      * come back ciphered without exception, so this is the one path that has to
      * solve a signature on every single track — and a signature that cannot be
      * solved is not a cheap no. Ahead of the walk that made every track pay for
@@ -558,22 +537,23 @@ object StreamResolver {
         // broken there is nothing here but a round trip and a log line. The
         // signed-in device clients in [playerStream] are the route that works.
         if (signatureSolverBroken) return null
+        val webClient = com.music.bitchord.data.service.ServiceConfig.webPlayerClient()
         return try {
-            timed("$videoId WEB_REMIX ensureVisitorData") { Innertube.ensureVisitorData() }
-            val timestamp = timed("$videoId WEB_REMIX getSignatureTimestamp") {
+            timed("$videoId ${webClient.clientName} ensureVisitorData") { Innertube.ensureVisitorData() }
+            val timestamp = timed("$videoId ${webClient.clientName} getSignatureTimestamp") {
                 signatureTimestamp(videoId)
             }
-            val response = timed("$videoId WEB_REMIX player()") {
-                Innertube.player(videoId, PlayerClient.WEB_REMIX, timestamp, authenticated = true)
+            val response = timed("$videoId ${webClient.clientName} player()") {
+                Innertube.player(videoId, webClient, timestamp, authenticated = true)
             }
             val candidates = select(response)
             if (candidates.isEmpty()) return null
             var format: Audio? = null
             var url: String? = null
-            timed("$videoId WEB_REMIX streamUrl") {
+            timed("$videoId ${webClient.clientName} streamUrl") {
                 for (candidate in candidates) {
                     val unlocked = streamUrl(videoId, candidate)
-                        ?.let { patchClientVersion(it, PlayerClient.WEB_REMIX.clientVersion) }
+                        ?.let { patchClientVersion(it, webClient.clientVersion) }
                     if (unlocked != null) {
                         format = candidate
                         url = unlocked
@@ -583,13 +563,13 @@ object StreamResolver {
             }
             val picked = format ?: return null
             val playable = url ?: return null
-            if (timed("$videoId WEB_REMIX probe") { probe(playable) } != Probe.OK) return null
-            TrackLog.d(TAG, "resolved $videoId via authenticated WEB_REMIX @ ${picked.kbps}kbps")
+            if (timed("$videoId ${webClient.clientName} probe") { probe(playable) } != Probe.OK) return null
+            TrackLog.d(TAG, "resolved $videoId via authenticated ${webClient.clientName} @ ${picked.kbps}kbps")
             Stream(playable, picked.kbps, picked.mimeType)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            TrackLog.d(TAG, "authenticated WEB_REMIX failed for $videoId: ${e.message}")
+            TrackLog.d(TAG, "authenticated ${webClient.clientName} failed for $videoId: ${e.message}")
             null
         }
     }
@@ -759,7 +739,7 @@ object StreamResolver {
         }
 
     /**
-     * Walks [CLIENTS] until one produces a URL that actually serves audio.
+     * Walks the ordered clients until one produces a URL that actually serves audio.
      *
      * Every step is allowed to fail without taking the attempt with it: a
      * client can be refused the track, hand back formats none of which [select]
@@ -963,7 +943,7 @@ object StreamResolver {
     }
 
     /**
-     * [CLIENTS], led by whichever one last worked.
+     * The ordered clients, led by whichever one last worked.
      *
      * Google's decisions apply to the whole app for as long as they last, not
      * to one track, so the client that served the previous song is overwhelmingly
@@ -971,8 +951,9 @@ object StreamResolver {
      * case at a single round trip.
      */
     private fun clientOrder(): List<PlayerClient> {
-        val first = preferred ?: return CLIENTS
-        return listOf(first) + CLIENTS.filterNot { it == first }
+        val all = clients()
+        val first = preferred ?: return all
+        return listOf(first) + all.filterNot { it == first }
     }
 
     @Volatile
@@ -1155,7 +1136,7 @@ object StreamResolver {
      *
      * This is the actual root cause of the report, and the reason it looks like
      * an age-restriction bug when it isn't. Ordinary tracks never reach a
-     * signature at all: the device clients at the top of [CLIENTS] hand back
+     * signature at all: the device clients at the top of the walk hand back
      * plain `url` fields, so a broken solver is invisible on everything that
      * plays. An age-restricted track is the one case where every unciphered
      * client is refused and the *only* remaining route —
@@ -1492,20 +1473,21 @@ object StreamResolver {
      *
      * So the refusal is fed back: forget the URL, stand the client down for
      * that track, and give up the preference so the next resolve starts from
-     * the top of [CLIENTS] rather than from the client that just failed.
+     * the top of the walk rather than from the client that just failed.
      *
      * Called from the playback path — see
      * [ChunkedDataSource][com.music.bitchord.playback.ChunkedDataSource].
      */
     fun onPlaybackRefused(url: String, responseCode: Int) {
         if (responseCode !in REFUSAL_CODES) return
-        // Only googlevideo's URLs say anything about a [PlayerClient]. Anything
-        // else — a module's stream URL, a downloaded file — carries no `c`
-        // parameter, and [PlayerClient.forStreamUrl] answers IOS for a URL it
-        // can't read rather than nothing. So without this, a Tidal URL
-        // answering 404 stands down the client that mints most of YouTube's,
-        // and the next YouTube track pays for a failure on a different server.
-        if (url.toHttpUrlOrNull()?.host?.endsWith("googlevideo.com") != true) return
+        // Only the stream host's URLs say anything about a [PlayerClient].
+        // Anything else — a module's stream URL, a downloaded file — carries
+        // no `c` parameter, and [PlayerClient.forStreamUrl] answers the first
+        // ordered client for a URL it can't read rather than nothing. So
+        // without this, a third-party URL answering 404 stands down the
+        // client that mints most of the service's, and the next track pays
+        // for a failure on a different server.
+        if (!com.music.bitchord.data.service.ServiceConfig.isStreamHost(url)) return
         val client = PlayerClient.forStreamUrl(url)
         // Keyed by videoId, and the fetch only knows the googlevideo URL it was
         // handed; the map is a latency cache of a few dozen entries, so finding
@@ -1692,7 +1674,7 @@ object StreamResolver {
         withContext(Dispatchers.IO) {
             val waited = SystemClock.elapsedRealtime()
             val extractor = ServiceList.YouTube.getStreamExtractor(
-                "https://www.youtube.com/watch?v=$videoId",
+                com.music.bitchord.data.service.ServiceConfig.watchUrl(videoId),
             )
             extractor.fetchPage()
             val candidates = extractor.audioStreams
