@@ -22,12 +22,6 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 
-/**
- * CookieManager cannot expire every HttpOnly cookie by name. Logging
- * out inside this WebView is the reliable way to make Add account present the
- * account chooser, without touching BitChord's separately encrypted sessions.
- */
-
 private const val TAG = "BitChord"
 
 /**
@@ -37,16 +31,19 @@ private const val TAG = "BitChord"
  * [WebSessionMode.SIGN_IN] loads the standard web login from the imported
  * service file. The user authenticates directly against the real login page
  * (2FA, passkeys etc. all work — it's the real page). When the service
- * redirects back to the login origin the session is taken automatically
- * and the screen closes. The browser's cookies are cleared on the way in,
- * or a listener who signed out would be waved straight back through as the
- * account they were trying to leave — see [BrowserSession.clearLoginCookies].
+ * redirects back to the login origin the listener confirms the profile shown
+ * by the live page. This deliberately leaves a multiple-channel account
+ * enough time to choose its identity before anything is saved. The browser's
+ * local cookies are cleared on the way in without visiting any logout
+ * endpoint, so adding an account cannot invalidate a previously saved
+ * session — see [BrowserSession.clearLoginCookies].
  *
- * [WebSessionMode.SWITCH_CHANNEL] keeps those cookies and opens the service
- * itself, so the listener can use the avatar menu's own Accounts list — the one
- * screen that authoritatively knows which channels exist and which is which.
- * Nothing is taken automatically there: the session is read when they say so,
- * by raising [captureRequest].
+ * [WebSessionMode.SWITCH_CHANNEL] keeps those cookies (or installs the saved
+ * snapshot for [initialCookie]) and opens the service itself, so the listener
+ * can use the avatar menu's own Accounts list — the one screen that
+ * authoritatively knows which channels exist and which is which. Nothing is
+ * taken automatically there: the session is read when they say so, by raising
+ * [captureRequest].
  *
  * Either way what is read is the page's own `ytcfg`, not a guess made later
  * from a server-side fetch. The credential itself never passes through app code.
@@ -55,6 +52,8 @@ private const val TAG = "BitChord"
 @Composable
 fun YtMusicLoginScreen(
     mode: WebSessionMode,
+    /** Cookie snapshot to install before opening an existing account's channel picker. */
+    initialCookie: String? = null,
     onCaptured: (CapturedSession) -> Unit,
     modifier: Modifier = Modifier,
     /**
@@ -64,44 +63,50 @@ fun YtMusicLoginScreen(
     captureRequest: Int = 0,
     /** Told when a capture was asked for and there was no session to take. */
     onCaptureUnavailable: () -> Unit = {},
+    /** True once a signed-in service page is available for confirmation. */
+    onPageReady: (Boolean) -> Unit = {},
     loginOrigin: String = ServiceConfig.loginOrigin(),
-    logoutLoginUrl: String = ServiceConfig.logoutLoginUrl(),
+    loginUrl: String = ServiceConfig.loginUrl(),
 ) {
     var webView by remember { mutableStateOf<WebView?>(null) }
     val currentOnCaptured by rememberUpdatedState(onCaptured)
     val currentOnUnavailable by rememberUpdatedState(onCaptureUnavailable)
+    val currentOnPageReady by rememberUpdatedState(onPageReady)
 
     LaunchedEffect(captureRequest) {
         if (captureRequest == 0) return@LaunchedEffect
         val view = webView
-        if (view == null || !captureFrom(view, loginOrigin, currentOnCaptured)) currentOnUnavailable()
+        if (view == null) currentOnUnavailable()
+        else captureFrom(view, loginOrigin, currentOnCaptured, currentOnUnavailable)
     }
 
     AndroidView(
         modifier = modifier.fillMaxSize(),
         factory = { context ->
+            // Clearing the local jar is enough to show a fresh login.
+            // Never visit a logout endpoint here: that invalidates a
+            // previously saved account on the server, so adding account B
+            // silently breaks account A.
             if (mode == WebSessionMode.SIGN_IN) BrowserSession.clearLoginCookies()
+            else initialCookie?.let(BrowserSession::installLoginCookies)
             WebView(context).apply {
                 settings.javaScriptEnabled = true
                 settings.domStorageEnabled = true
 
                 webViewClient = object : WebViewClient() {
-                    private var captured = false
-
                     override fun onPageFinished(view: WebView?, url: String?) {
-                        // Only [WebSessionMode.SIGN_IN] finishes by itself. In
-                        // the switch flow the first service page is
-                        // where the listener starts, not where they are done —
-                        // grabbing the session there would save the channel
-                        // they came to change.
-                        if (mode != WebSessionMode.SIGN_IN) return
-                        if (captured || url?.startsWith(loginOrigin) != true) return
-                        if (view != null && captureFrom(view, loginOrigin, currentOnCaptured)) captured = true
+                        // Reaching the service origin only enables
+                        // confirmation. A multi-channel login can still be
+                        // waiting for the listener to choose an identity on
+                        // this very page. Capturing automatically here is the
+                        // race that used to create a fake profile and close
+                        // too soon.
+                        currentOnPageReady(url?.startsWith(loginOrigin) == true)
                     }
                 }
 
                 webView = this
-                loadUrl(if (mode == WebSessionMode.SIGN_IN) logoutLoginUrl else "$loginOrigin/")
+                loadUrl(if (mode == WebSessionMode.SIGN_IN) loginUrl else "$loginOrigin/")
             }
         },
     )
@@ -110,14 +115,22 @@ fun YtMusicLoginScreen(
 /**
  * Takes the session from [view], if it is holding one.
  *
- * @return whether there was one to take. False means the cookie jar has no
- *   signing secret in it yet — the page is mid-login, or is not a YouTube page
- *   at all — and the caller should leave the screen open rather than saving
- *   something that cannot sign a request. See [AuthStore.hasApiSid].
+ * Calls [onUnavailable] when the cookie jar has no signing secret in it yet —
+ * the page is mid-login, or is not a service page at all — and the caller
+ * should leave the screen open rather than saving something that cannot sign
+ * a request. See [AuthStore.hasApiSid].
  */
-private fun captureFrom(view: WebView, loginOrigin: String, onCaptured: (CapturedSession) -> Unit): Boolean {
+private fun captureFrom(
+    view: WebView,
+    loginOrigin: String,
+    onCaptured: (CapturedSession) -> Unit,
+    onUnavailable: () -> Unit,
+) {
     val cookies = CookieManager.getInstance().getCookie(loginOrigin)
-    if (cookies == null || !AuthStore.hasApiSid(cookies)) return false
+    if (cookies == null || !AuthStore.hasApiSid(cookies)) {
+        onUnavailable()
+        return
+    }
     // Flushed here rather than left to the WebView's own schedule: the screen
     // is usually closing in the next frame, and a cookie jar written after
     // that is a jar the next sign-in reads instead of this one.
@@ -125,24 +138,29 @@ private fun captureFrom(view: WebView, loginOrigin: String, onCaptured: (Capture
 
     view.evaluateJavascript(YTCFG_PROBE) { raw ->
         val config = raw.parseConfig()
-        if (config == null) {
-            Log.w(TAG, "no ytcfg on the page; falling back to the shell for identity")
+        val loggedIn = config?.get("loggedIn").let {
+            it is JsonPrimitive && it.content == "true"
         }
+        if (config == null || !loggedIn) {
+            Log.w(TAG, "confirmation requested before the page exposed a signed-in identity")
+            onUnavailable()
+            return@evaluateJavascript
+        }
+        val pageId = config.string("pageId")
         onCaptured(
             CapturedSession(
                 cookie = cookies,
-                // `<accountSyncId>||<sessionSyncId>` — only the first half
-                // names the account; the second changes on its own schedule.
-                dataSyncId = config?.string("dataSyncId")?.substringBefore("||"),
-                pageId = config?.string("pageId"),
-                authUser = config?.string("authUser"),
-                visitorData = config?.string("visitorData"),
-                clientVersion = config?.string("clientVersion"),
-                loggedIn = config?.get("loggedIn").let { it is JsonPrimitive && it.content == "true" },
+                // A delegated identity is the most specific answer the live
+                // page can give. Otherwise normalise its DATASYNC_ID.
+                dataSyncId = pageId ?: normalizeDataSyncId(config.string("dataSyncId")),
+                pageId = pageId,
+                authUser = config.string("authUser"),
+                visitorData = config.string("visitorData"),
+                clientVersion = config.string("clientVersion"),
+                loggedIn = true,
             ),
         )
     }
-    return true
 }
 
 /**

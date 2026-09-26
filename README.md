@@ -101,7 +101,7 @@ BitChord ships **no service endpoints, client identities, or link hosts**. On a 
   "app": "bitchord-service",
   "configVersion": 1,
   "endpoints": {"musicBase": "https://…", "tubeBase": "https://…", "musicOrigin": "https://…", "tubeOrigin": "https://…"},
-  "login": {"origin": "https://…", "loginUrl": "https://…", "logoutLoginUrl": "https://…", "cookieOrigins": ["…"]},
+  "login": {"origin": "https://…", "loginUrl": "https://…", "cookieOrigins": ["…"]},
   "webClient": {"name": "…", "version": "…", "id": "…", "ua": "…",
     "stats": {"cplayer": "…", "cbr": "…", "cbrver": "…", "cos": "…", "cosver": "…"}},
   "playerClients": [{"name": "…", "version": "…", "id": "…", "ua": "…",
@@ -142,7 +142,9 @@ Grab the latest signed APK from the [Releases](https://github.com/kushagrasinghx
 
 <h1><a id="contributing"></a>Contributing</h1>
 
-We welcome contributions to BitChord! When submitting a Pull Request, please ensure you make your PR against the **`latest`** branch, not the `main` branch.
+We welcome contributions to BitChord! Please review our [Contributing Guide](CONTRIBUTING.md) and [Code of Conduct](CODE_OF_CONDUCT.md) before submitting a Pull Request.
+
+[**Contributing Guide**](CONTRIBUTING.md) · [**Code of Conduct**](CODE_OF_CONDUCT.md) · [**Maintainers**](MAINTAINERS.md) · [**Additional Docs**](ADDITIONAL.md)
 
 Please do not submit PRs that add stream-decryption keys, signature-solving workarounds, credential-harvesting, service endpoint URLs, client versions, user agents, link hosts, sample service files, or features whose purpose is to defeat age, region, or entitlement restrictions. Such PRs will be closed without review.
 

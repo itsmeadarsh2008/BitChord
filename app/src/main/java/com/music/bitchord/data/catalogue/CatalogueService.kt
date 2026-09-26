@@ -146,38 +146,45 @@ object CatalogueService {
 
     /**
      * The best CDN URL this track really has, and the bitrate it will deliver.
-     *
-     * The rewrite to `_320` is conditional on [CatalogueMoreInfo.supports320]
-     * rather than applied to everything. Rewriting unconditionally is not an
-     * upgrade — the CDN has no 320 rendition to serve for a track that hasn't
-     * got one — and the old code did it anyway *and* then reported a flat 320
-     * upstream. A 96kbps stream advertised as 320 clears
-     * [SourceResolver.worthSwapping][com.music.bitchord.data.sources.SourceResolver]
-     * against the service's 160kbps Opus, so the listener was swapped down to
-     * a third of the bitrate on a line that claimed twice it.
+     * Deciphers with the file's stream key, then picks the rendition — see
+     * [selectBestCatalogueStream].
      */
     private fun bestStream(
         encryptedUrl: String,
         supports320: Boolean,
         urlKey: String,
-    ): CatalogueStream? {
-        val decryptedUrl = decryptUrl(encryptedUrl, urlKey)
-        if (decryptedUrl.isBlank()) return null
+    ): CatalogueStream? =
+        selectBestCatalogueStream(decryptUrl(encryptedUrl, urlKey), supports320)
 
-        val suffix = Regex("_(48|96|160|320)\\.(mp4|aac|mp3)$").find(decryptedUrl)
-            // No recognisable rung in the name, so there is nothing to rewrite
-            // and nothing to claim: the bitrate goes up as unknown rather than
-            // as a guess.
-            ?: return CatalogueStream(decryptedUrl, if (supports320) 320 else null)
+/**
+ * Select the highest catalogue CDN rendition without losing URL parameters.
+ *
+ * The encrypted URL normally names the 96 kbps file and the catalogue states
+ * whether the parallel 320 kbps object exists. CDN URLs are not guaranteed to
+ * end at the container: cache-busting or access query parameters may follow
+ * it. An end-anchored match misses those URLs, leaves `_96.mp4` in place,
+ * and still reports 320 upstream — playback and downloads then display 320
+ * while both fetch the 96 kbps object.
+ */
+internal fun selectBestCatalogueStream(decryptedUrl: String, supports320: Boolean): CatalogueStream? {
+    if (decryptedUrl.isBlank()) return null
+    val rendition = Regex(
+        "_(48|96|160|320)\\.(mp4|aac|mp3)(?=[?#]|$)",
+        RegexOption.IGNORE_CASE,
+    ).find(decryptedUrl)
+        // An unrecognised URL must not be labelled 320 merely because the
+        // catalogue says that rendition exists; no rewrite was actually made.
+        ?: return CatalogueStream(decryptedUrl, null)
 
-        val offered = suffix.groupValues[1].toIntOrNull()
-        val extension = suffix.groupValues[2]
-        return if (supports320) {
-            CatalogueStream(decryptedUrl.replaceRange(suffix.range, "_320.$extension"), 320)
-        } else {
-            CatalogueStream(decryptedUrl, offered)
-        }
-    }
+    val offered = rendition.groupValues[1].toInt()
+    if (!supports320) return CatalogueStream(decryptedUrl, offered)
+
+    val extension = rendition.groupValues[2]
+    return CatalogueStream(
+        decryptedUrl.replaceRange(rendition.range, "_320.$extension"),
+        320,
+    )
+}
 
     suspend fun searchSongs(query: String): List<CatalogueSongItem> = runCatching {
         val catalogue = ServiceConfig.catalogue()

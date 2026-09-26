@@ -67,8 +67,6 @@ data class Login(
     val origin: String,
     /** Full URL loaded for a fresh sign-in. */
     val loginUrl: String,
-    /** Full URL loaded to force the account chooser (logout, then login). */
-    val logoutLoginUrl: String,
     /** Bare hosts whose cookies belong to the login session. */
     val cookieOrigins: List<String>,
 )
@@ -344,7 +342,6 @@ object ServiceConfig {
         urlProblem("endpoints.tubeOrigin", file.endpoints.tubeOrigin)?.let(::add)
         urlProblem("login.origin", file.login.origin)?.let(::add)
         urlProblem("login.loginUrl", file.login.loginUrl)?.let(::add)
-        urlProblem("login.logoutLoginUrl", file.login.logoutLoginUrl)?.let(::add)
         urlProblem("swDataUrl", file.swDataUrl)?.let(::add)
         urlProblem("links.shareOrigin", file.links.shareOrigin)?.let(::add)
         if (file.login.cookieOrigins.isEmpty() || file.login.cookieOrigins.size > MAX_HOSTS) {
@@ -513,7 +510,6 @@ object ServiceConfig {
     fun swDataUrl(): String = requireReady().file.swDataUrl
     fun loginOrigin(): String = requireReady().file.login.origin
     fun loginUrl(): String = requireReady().file.login.loginUrl
-    fun logoutLoginUrl(): String = requireReady().file.login.logoutLoginUrl
     fun loginCookieHosts(): List<String> = requireReady().file.login.cookieOrigins
     fun catalogue(): CatalogueBlock =
         requireReady().file.catalogue ?: throw ServiceFileRequired()
@@ -538,27 +534,24 @@ object ServiceConfig {
     }
 
     /**
-     * The browser-shaped web client as a player identity: carries the
-     * signed-in session where the anonymous walk cannot go. Built from the
-     * file's web client block, which is always ciphered and therefore always
-     * needs a signature timestamp.
+     * The browser-shaped web client as a player identity. Only meaningful
+     * where a caller dresses a fetch as it; the player walk itself lives in
+     * the extraction library's catalog now.
      */
     fun webPlayerClient(): PlayerClient {
         val file = requireReady().file
         return PlayerClient(
             clientName = file.webClient.name,
             clientVersion = file.webClient.version,
-            clientId = file.webClient.id,
             userAgent = file.webClient.ua,
             origin = file.endpoints.musicOrigin,
-            apiBaseMusic = true,
-            needsSignatureTimestamp = true,
         )
     }
 
     /**
      * Player clients in file order, cheapest and most reliable first as the
-     * file's author ranked them.
+     * file's author ranked them. Used to dress media fetches for URLs the
+     * extraction library did not mint (chiefly the extractor failsafe's).
      */
     fun orderedClients(): List<PlayerClient> {
         val file = requireReady().file
@@ -589,16 +582,8 @@ object ServiceConfig {
     private fun ServiceClient.toPlayerClient(): PlayerClient = PlayerClient(
         clientName = name,
         clientVersion = version,
-        clientId = id,
         userAgent = ua,
-        osName = osName,
-        osVersion = osVersion,
-        deviceMake = deviceMake,
-        deviceModel = deviceModel,
-        androidSdkVersion = androidSdkVersion,
         origin = origin,
-        apiBaseMusic = apiBase == "music",
-        needsSignatureTimestamp = needsSignatureTimestamp,
     )
 
     private fun hostOf(value: String): String =

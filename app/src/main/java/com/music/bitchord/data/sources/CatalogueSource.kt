@@ -25,7 +25,13 @@ class CatalogueSource(
         SourceHealth.Ok()
     }.getOrDefault(SourceHealth.Rejected("Catalogue not configured — the service file carries no catalogue section"))
 
-    override suspend fun search(query: String, limit: Int, waitForAll: Boolean): List<Song> {
+    /** [waitForAll] and [request] are moot: one endpoint, one catalogue, no tiers to ask at. */
+    override suspend fun search(
+        query: String,
+        limit: Int,
+        waitForAll: Boolean,
+        request: StreamRequest?,
+    ): List<Song> {
         TrackLog.d(TAG, "▶ Catalogue searchSongs() query=\"$query\" limit=$limit")
         val results = prioritizeExplicit(CatalogueService.searchSongs(query))
         TrackLog.d(TAG, "  ✓ Catalogue returned ${results.size} tracks" + results.take(5)

@@ -12,12 +12,14 @@ import coil3.memory.MemoryCache
 import coil3.request.crossfade
 import com.music.bitchord.auth.AuthStore
 import com.music.bitchord.data.canvas.CanvasCache
+import com.music.bitchord.data.smb.SmbCoverFetcher
 import com.music.bitchord.data.webdav.WebDavCoilAuth
 import com.music.bitchord.data.canvas.SpotifyToken
 import com.music.bitchord.playback.AudioCache
 import com.music.bitchord.playback.LastPlayed
 import com.music.bitchord.playback.OriginalVersion
 import com.music.bitchord.data.innertube.Innertube
+import com.music.bitchord.data.innertube.InnerTubeXResolver
 import com.music.bitchord.data.listentogether.ListenTogether
 import com.music.bitchord.data.scrobbling.LastFM
 import com.music.bitchord.data.service.ServiceConfig
@@ -30,6 +32,7 @@ import com.music.bitchord.download.Downloads
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlin.concurrent.thread
 
 class BitChordApplication : Application(), SingletonImageLoader.Factory {
 
@@ -39,6 +42,23 @@ class BitChordApplication : Application(), SingletonImageLoader.Factory {
         // PlaybackService shares this process, so seeding the cookie here means
         // stream resolution is authenticated from the first play onwards.
         authStore = AuthStore(this)
+        // Opened off the main thread, alongside everything below: none of these
+        // reads a setting or the session, and between them they are the slowest
+        // opens at startup — SourceRegistry's encrypted store most of all.
+        // Started only once [AuthStore] exists, because both encrypted stores
+        // share one keystore master key and a first launch must not have two
+        // threads racing to create it. Joined before onCreate returns, so
+        // nothing that runs after startup can see any of them half open.
+        val backgroundInit = thread(name = "startup-init") {
+            SourceRegistry.init(this)
+            InnerTubeXResolver.init(this)
+            // Its own directory: canvas clips are looping video, not audio, and
+            // belong in a cache AudioCache's own limit and eviction policy were
+            // never sized for. See CanvasCache's doc for why this one exists at
+            // all — it is the fix for canvas clips re-fetching the same few
+            // seconds of video from the network on every loop.
+            CanvasCache.init(this)
+        }
         // Migration-safe: an old single cookie becomes the first encrypted
         // session, while newer installs restore the profile the listener chose.
         val restoredSession = authStore.activeSession
@@ -60,7 +80,7 @@ class BitChordApplication : Application(), SingletonImageLoader.Factory {
                 ?.let { Innertube.selectChannel(it.pageId, it.dataSyncId, it.authUser) }
             CoroutineScope(Dispatchers.IO).launch { Innertube.ensureSessionScope() }
         }
-        AppSettings.init(this)
+        AppSettings.init(this, authStore)
         // Service endpoints and client identities supplied by the listener's
         // imported service file. Empty until one is imported — every
         // service-backed path reports that instead of failing obscurely.
@@ -70,9 +90,9 @@ class BitChordApplication : Application(), SingletonImageLoader.Factory {
         // and the clock offset are not restored — both are re-established on
         // the next connect, which is the only way to be sure they are current.
         ListenTogether.init(this)
-        SourceRegistry.init(this)
         SearchHistory.init(this)
         LastPlayed.init(this)
+        com.music.bitchord.playback.PartyPersonalQueueStash.init(this)
         // Which tracks the listener has reverted to YouTube's own upload. Read
         // by [Song.toMediaItem], so it has to be open before the restart
         // snapshot below is turned back into queue items.
@@ -89,12 +109,6 @@ class BitChordApplication : Application(), SingletonImageLoader.Factory {
         // One cache directory can only be opened once per process, and
         // PlaybackService shares this one — so it's opened here, not there.
         AudioCache.init(this)
-        // Same reasoning, its own directory: canvas clips are looping video,
-        // not audio, and belong in a cache AudioCache's own limit and eviction
-        // policy were never sized for. See CanvasCache's doc for why this one
-        // exists at all — it is the fix for canvas clips re-fetching the same
-        // few seconds of video from the network on every loop.
-        CanvasCache.init(this)
         // The offscreen WebView that mints a Spotify access token from the
         // listener's own session cookie needs a Context, and nothing in the
         // suspend call chain that reaches it (a track's canvas lookup) has
@@ -114,6 +128,7 @@ class BitChordApplication : Application(), SingletonImageLoader.Factory {
         }
         // Initialize LastFM with saved settings if available
         initLastfm()
+        backgroundInit.join()
     }
 
     /**
@@ -133,6 +148,9 @@ class BitChordApplication : Application(), SingletonImageLoader.Factory {
             // the header is attached per request instead. See WebDavCoilAuth.
             .components {
                 add(WebDavCoilAuth())
+                // Covers filed on the SMB share; anything else falls
+                // through to Coil's own fetchers. See SmbCoverFetcher.
+                add(SmbCoverFetcher.Factory())
             }
             .memoryCache {
                 MemoryCache.Builder()

@@ -17,7 +17,10 @@ jobs:
 
     - name: Reject shipped service literals
       run: |
-        if grep -rn '"https\?://[^"]*\(youtube\.com\|youtu\.be\|googlevideo\.com\|google\.com\)' app/src/main --include='*.kt' | grep -v 'data/service/ServiceConfig.kt'; then
+        # Excluded: BotGuard PoToken mechanism endpoints (inseparable from the
+        # proof-of-origin flow, carry no client identities or keys) and the
+        # lyrics transliteration helper (unauthenticated public utility).
+        if grep -rn '"https\?://[^"]*\(youtube\.com\|youtu\.be\|googlevideo\.com\|google\.com\)' app/src/main --include='*.kt' | grep -v 'data/service/ServiceConfig.kt' | grep -v 'data/innertube/potoken/' | grep -v 'data/lyrics/LyricsTranslation.kt'; then
           echo "Quoted service URL literals do not belong in app code; put them in the service file."
           exit 1
         fi

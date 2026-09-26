@@ -1,52 +1,39 @@
 package com.music.bitchord.data.innertube
 
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import org.schabi.newpipe.extractor.NewPipe
+import org.schabi.newpipe.extractor.services.youtube.YoutubeParsingHelper
+import java.util.Locale
+
 /**
- * One client identity for the `player` endpoint.
+ * The identity a googlevideo URL says minted it, as far as its media fetch
+ * has to repeat it.
  *
- * Identities arrive in the imported service file rather than living here:
- * which clients are answered changes without notice — an identity that
- * returns `OK` today answers `LOGIN_REQUIRED` next month, and one that is
- * merely *old* is refused with a bare HTTP 400 before playability is even
- * considered. So this is a list to walk rather than a constant — see
- * [StreamResolver] and [com.music.bitchord.data.service.ServiceConfig].
- *
- * Three things travel together and must not be separated:
- *
- *  - **[userAgent]**, which the media fetch has to repeat. The stream host
- *    bakes the client into the URL as `c=`/`cver=` and compares it against
- *    the headers of the request that comes back for the bytes.
- *  - **[origin]**, sent only by the browser-shaped clients, and pointing at
- *    the host that client actually runs on. Native app clients send none, and
- *    sending one anyway is as wrong as omitting it from a web client.
- *  - **[needsSignatureTimestamp]**, which decides whether the player request
- *    has to carry a timestamp lifted from the service's player JavaScript.
- *    The clients that need it are the ones that answer with ciphered formats.
+ * googlevideo bakes the client into the URL as `c=`/`cver=` and compares it
+ * against the headers of the request that comes back for the bytes, so the
+ * fetch has to be dressed as that client. URLs InnerTubeX mints carry their
+ * own headers (see [InnerTubeXResolver.headersFor]); this covers the rest,
+ * chiefly the NewPipe failsafe's, which picks a client of its own choosing.
  */
 data class PlayerClient(
     val clientName: String,
     val clientVersion: String,
-    val clientId: String,
     val userAgent: String,
-    val osName: String? = null,
-    val osVersion: String? = null,
-    val deviceMake: String? = null,
-    val deviceModel: String? = null,
-    val androidSdkVersion: String? = null,
-    /** The host this client runs on, for browser-shaped clients only. */
+    /**
+     * The host this client runs on, for browser-shaped clients only. Native app
+     * clients send none, and sending one anyway is as wrong as omitting it from
+     * a web client.
+     */
     val origin: String? = null,
-    /** Which API base serves this client; browser-shaped ones use the music host. */
-    val apiBaseMusic: Boolean = true,
-    /** Ciphered formats can't be unlocked without one. */
-    val needsSignatureTimestamp: Boolean = false,
 ) {
     val referer: String? get() = origin?.let { "$it/" }
 
     /**
      * Headers the *media* request must carry for a URL this client minted.
      *
-     * The stream fetch is a separate request from the one that produced the
-     * URL, and the stream host treats a mismatch between the two as reason
-     * enough to throttle the response to a crawl or refuse it with 403.
+     * googlevideo treats a mismatch between the request that produced the URL
+     * and the one fetching it as reason enough to throttle the response to a
+     * crawl or refuse it with 403.
      */
     fun mediaHeaders(): Map<String, String> = buildMap {
         put("User-Agent", userAgent)
@@ -58,11 +45,43 @@ data class PlayerClient(
         /**
          * The client a stream URL says minted it, so the media fetch can be
          * dressed as that client. Answered from the imported service file's
-         * client table; throws
-         * [com.music.bitchord.data.service.ServiceFileRequired] while none
-         * is installed.
+         * client table — see
+         * [com.music.bitchord.data.service.ServiceConfig] — which is why this
+         * file holds no client versions or user agents of its own.
+         *
+         * The one exception names no version either: NewPipe's extraction
+         * mints its URLs itself, so that client is rebuilt below with the
+         * agent read live from NewPipe rather than pinned here.
          */
-        fun forStreamUrl(url: String): PlayerClient =
-            com.music.bitchord.data.service.ServiceConfig.clientForUrl(url)
+        fun forStreamUrl(url: String): PlayerClient {
+            val parsed = url.toHttpUrlOrNull()
+            val name = parsed?.queryParameter("c")?.uppercase(Locale.ROOT)
+            if (name?.startsWith("VISIONOS") == true) {
+                return visionOs(parsed.queryParameter("cver"))
+            }
+            return com.music.bitchord.data.service.ServiceConfig.clientForUrl(url)
+        }
+
+        /** NewPipe's extraction mints with this; its agent is read from NewPipe so the two can't drift. */
+        private fun visionOs(version: String?) = PlayerClient(
+            clientName = "VISIONOS",
+            clientVersion = version ?: "1.02",
+            userAgent = YoutubeParsingHelper.getVisionOsUserAgent(NewPipe.getPreferredLocalization()),
+        )
+
+        /** Largest single range googlevideo reliably serves for [url]'s client; mirrors InnerTubeX's `mediaRangeChunkSize`. */
+        fun rangeBytesFor(url: String): Long {
+            val parsed = url.toHttpUrlOrNull() ?: return Long.MAX_VALUE
+            if (!parsed.host.endsWith("googlevideo.com")) return Long.MAX_VALUE
+            val name = parsed.queryParameter("c")?.uppercase(Locale.ROOT)
+            return if (name == "ANDROID_VR" || name?.startsWith("TVHTML5_SIMPLY") == true) {
+                NARROW_RANGE_BYTES
+            } else {
+                RANGE_BYTES
+            }
+        }
+
+        private const val RANGE_BYTES = 1024L * 1024
+        private const val NARROW_RANGE_BYTES = 512L * 1024
     }
 }

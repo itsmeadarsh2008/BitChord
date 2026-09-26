@@ -25,7 +25,6 @@ class ServiceFileValidationTest {
         tubeOrigin: String = "https://tube.example.invalid",
         loginOrigin: String = "https://login.example.invalid",
         loginUrl: String = "https://login.example.invalid/signin",
-        logoutLoginUrl: String = "https://login.example.invalid/logout-signin",
         cookieOrigins: String = "\"login.example.invalid\", \"tube.example.invalid\"",
         clients: String = CLIENTS,
         order: String = "\"ALPHA\", \"BETA\"",
@@ -50,7 +49,6 @@ class ServiceFileValidationTest {
           "login": {
             "origin": "$loginOrigin",
             "loginUrl": "$loginUrl",
-            "logoutLoginUrl": "$logoutLoginUrl",
             "cookieOrigins": [$cookieOrigins]
           },
           "webClient": {
